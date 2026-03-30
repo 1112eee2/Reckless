@@ -29,28 +29,15 @@ jobs:
       - name: Build release binary
         shell: bash
         run: |
-          set -e
-          cargo build --release --verbose
+          cargo build --release
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
       - name: Rename binary
-        shell: pwsh
+        shell: bash
         run: |
-          $paths = @(
-            "target/release/reckless.exe",
-            "target/x86_64-pc-windows-msvc/release/reckless.exe"
-          )
-
-          $binPath = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-          if (-not $binPath) {
-            Write-Error "Error: reckless.exe not found in expected locations."
-            Get-ChildItem -Path target -Filter reckless.exe -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
-            exit 1
-          }
-
-          Move-Item -Path $binPath -Destination "reckless-windows-${{ matrix.variant }}.exe"
+          tuple=$(rustc --print host-tuple)
+          mv target/$tuple/release/reckless.exe reckless-windows-${{ matrix.variant }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5.0.0
