@@ -1,0 +1,51 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: bmi2
+            rustflags: "-C target-cpu=x86-64-v2 -C target-feature=+bmi2"
+          - variant: avx2
+            rustflags: "-C target-cpu=x86-64-v3"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          set -e
+          cargo build --release
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          if [ ! -f "target/release/reckless.exe" ]; then
+            echo "Error: reckless.exe not found at target/release"
+            exit 1
+          fi
+
+          mv target/release/reckless.exe reckless-windows-${{ matrix.variant }}.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5.0.0
+        with:
+          name: reckless-windows-${{ matrix.variant }}
+          path: reckless-windows-${{ matrix.variant }}.exe
