@@ -15,10 +15,8 @@ jobs:
       matrix:
         include:
           - variant: bmi2
-            target: x86_64-pc-windows-msvc
             rustflags: "-C target-cpu=x86-64-v2 -C target-feature=+bmi2"
           - variant: avx2
-            target: x86_64-pc-windows-msvc
             rustflags: "-C target-cpu=x86-64-v3"
 
     steps:
@@ -31,21 +29,15 @@ jobs:
       - name: Build release binary
         shell: bash
         run: |
-          set -e
-          cargo build --release --target "${{ matrix.target }}" --verbose
-
-          if [ ! -f "target/${{ matrix.target }}/release/reckless.exe" ]; then
-            echo "Build failed: reckless.exe not found at target/${{ matrix.target }}/release"
-            ls -la "target/${{ matrix.target }}/release" || echo "Release directory does not exist"
-            exit 1
-          fi
+          cargo build --release
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
       - name: Rename binary
         shell: bash
         run: |
-          mv "target/${{ matrix.target }}/release/reckless.exe" "reckless-windows-${{ matrix.variant }}.exe"
+          tuple=$(rustc --print host-tuple)
+          mv target/$tuple/release/reckless.exe reckless-windows-${{ matrix.variant }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5.0.0
