@@ -29,7 +29,6 @@ jobs:
       - name: Build release binary
         shell: bash
         run: |
-          set -e
           cargo build --release
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
@@ -37,12 +36,8 @@ jobs:
       - name: Rename binary
         shell: bash
         run: |
-          if [ ! -f "target/release/reckless.exe" ]; then
-            echo "Error: reckless.exe not found at target/release"
-            exit 1
-          fi
-
-          mv target/release/reckless.exe reckless-windows-${{ matrix.variant }}.exe
+          tuple=$(rustc --print host-tuple)
+          mv target/$tuple/release/reckless.exe reckless-windows-${{ matrix.variant }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5.0.0
