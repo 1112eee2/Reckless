@@ -1,5 +1,5 @@
 use crate::{
-    lookup::{bishop_attacks, knight_attacks, pawn_attacks_setwise},
+    lookup::{bishop_attacks, king_attacks, knight_attacks, pawn_attacks_setwise, rook_attacks},
     search::NodeType,
     thread::ThreadData,
     types::{ArrayVec, Bitboard, MAX_MOVES, Move, MoveEntry, MoveList, PieceType},
@@ -84,7 +84,7 @@ impl MovePicker {
                     continue;
                 }
 
-                let threshold = self.threshold.unwrap_or_else(|| -entry.score / 46 + 109);
+                let threshold = self.threshold.unwrap_or_else(|| -entry.score / 45 + 111);
                 if !td.board.see(entry.mv, threshold) {
                     self.bad_noisy.push(entry.mv);
                     continue;
@@ -170,6 +170,10 @@ impl MovePicker {
 
                 entry.score =
                     16 * captured.value() + td.noisy_history.get(threats, td.board.moved_piece(mv), mv.to(), captured);
+
+                if mv.is_promotion() && mv.promo_piece_type() == PieceType::Queen {
+                    entry.score += 4000;
+                }
             }
         }
     }
@@ -177,41 +181,76 @@ impl MovePicker {
     fn score_quiet(&mut self, td: &ThreadData, ply: isize) {
         let threats = td.board.all_threats();
         let side = td.board.side_to_move();
-        let pawn_threats = td.board.piece_threats(PieceType::Pawn);
-        let minor_threats =
-            pawn_threats | td.board.piece_threats(PieceType::Knight) | td.board.piece_threats(PieceType::Bishop);
-        let rook_threats = minor_threats | td.board.piece_threats(PieceType::Rook);
 
-        let threatened = [Bitboard(0), pawn_threats, pawn_threats, minor_threats, rook_threats, Bitboard(0)];
-        let escape = [0, 8000, 8000, 14000, 20000, 0];
+        let threatened = {
+            let pawn_threats = td.board.piece_threats(PieceType::Pawn);
+            let minor_threats =
+                pawn_threats | td.board.piece_threats(PieceType::Knight) | td.board.piece_threats(PieceType::Bishop);
+            let rook_threats = minor_threats | td.board.piece_threats(PieceType::Rook);
+            [Bitboard(0), pawn_threats, pawn_threats, minor_threats, rook_threats, Bitboard(0)]
+        };
+
+        let escape = [0, 7768, 8218, 13424, 20208, 0];
 
         // safe squares where we can attack an opponent piece
-        let mut n = Bitboard(0);
-        let mut b = Bitboard(0);
-        let pawn_offense = pawn_attacks_setwise(td.board.colors(!side), !side) & !threats;
-        for square in td.board.their(PieceType::Rook) {
-            n |= knight_attacks(square);
-            b |= bishop_attacks(square, td.board.occupancies());
-        }
-        for square in td.board.their(PieceType::Queen) {
-            n |= knight_attacks(square);
-        }
+        let offense = {
+            let mut n = Bitboard(0);
+            let mut b = Bitboard(0);
+            let mut q = Bitboard(0);
+            let pawn_offense = pawn_attacks_setwise(td.board.colors(!side), !side) & !threats;
 
-        let offense = [pawn_offense, n & !threats, b & !threats, Bitboard(0), Bitboard(0), Bitboard(0)];
+            for square in td.board.colored_pieces(!side, PieceType::Bishop) & !threats {
+                n |= knight_attacks(square);
+                q |= rook_attacks(square, td.board.occupancies());
+            }
+
+            for square in td.board.colored_pieces(!side, PieceType::Rook) {
+                n |= knight_attacks(square);
+                b |= bishop_attacks(square, td.board.occupancies());
+
+                if !threats.contains(square) {
+                    q |= bishop_attacks(square, td.board.occupancies());
+                }
+            }
+            for square in td.board.colored_pieces(!side, PieceType::Queen) {
+                n |= knight_attacks(square);
+            }
+
+            [pawn_offense, n & !threats, b & !threats, Bitboard(0), q & !threats, Bitboard(0)]
+        };
+
+        // King ring diag attacks and ortho attacks
+        let king_ring_ortho = {
+            let mut king_ring_ortho = Bitboard(0);
+            for square in king_attacks(td.board.king_square(!side)) {
+                king_ring_ortho |= rook_attacks(square, td.board.occupancies());
+            }
+            king_ring_ortho &= !threats;
+            king_ring_ortho
+        };
+
+        // don't move king wall pawns
+        let wall_pawns = if Bitboard::HOME_ROWS[side].contains(td.board.king_square(side)) {
+            king_attacks(td.board.king_square(side)) & td.board.pieces(PieceType::Pawn)
+        } else {
+            Bitboard(0)
+        };
 
         for entry in self.list.iter_mut() {
             let mv = entry.mv;
             let pt = td.board.piece_on(mv.from()).piece_type();
 
-            entry.score = td.quiet_history.get(threats, side, mv)
-                + td.conthist(ply, 1, mv)
+            entry.score = 2048 * td.quiet_history.get(threats, side, mv) / 1024
+                + 1536 * td.conthist(ply, 1, mv) / 1024
                 + td.conthist(ply, 2, mv)
                 + td.conthist(ply, 4, mv)
                 + td.conthist(ply, 6, mv)
                 + escape[pt] * threatened[pt].contains(mv.from()) as i32
-                + 10000 * td.board.checking_squares(pt).contains(mv.to()) as i32
-                - 8000 * threatened[pt].contains(mv.to()) as i32
-                + 6000 * offense[pt].contains(mv.to()) as i32;
+                + 9325 * td.board.checking_squares(pt).contains(mv.to()) as i32
+                - 7584 * threatened[pt].contains(mv.to()) as i32
+                + 6158 * offense[pt].contains(mv.to()) as i32
+                + 5000 * (pt == PieceType::Rook && king_ring_ortho.contains(mv.to())) as i32
+                - 4000 * wall_pawns.contains(mv.from()) as i32;
         }
     }
 }

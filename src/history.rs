@@ -23,7 +23,7 @@ impl QuietHistoryEntry {
     const MAX_FACTORIZER: i32 = 1852;
     const MAX_BUCKET: i32 = 6324;
 
-    pub fn bucket(&self, threats: Bitboard, mv: Move) -> i16 {
+    pub const fn bucket(&self, threats: Bitboard, mv: Move) -> i16 {
         let from_threatened = threats.contains(mv.from()) as usize;
         let to_threatened = threats.contains(mv.to()) as usize;
 
@@ -168,7 +168,7 @@ impl ContinuationCorrectionHistory {
     pub fn subtable_ptr(
         &mut self, in_check: bool, capture: bool, piece: Piece, to: Square,
     ) -> *mut PieceToHistory<i16> {
-        self.entries[in_check as usize][capture as usize][piece][to].as_mut_ptr().cast()
+        &raw mut self.entries[in_check as usize][capture as usize][piece][to]
     }
 
     pub fn get(&self, subtable_ptr: *mut PieceToHistory<i16>, piece: Piece, to: Square) -> i32 {
@@ -198,7 +198,7 @@ impl ContinuationHistory {
     pub fn subtable_ptr(
         &mut self, in_check: bool, capture: bool, piece: Piece, to: Square,
     ) -> *mut PieceToHistory<i16> {
-        self.entries[in_check as usize][capture as usize][piece][to].as_mut_ptr().cast()
+        &raw mut self.entries[in_check as usize][capture as usize][piece][to]
     }
 
     pub fn get(&self, subtable_ptr: *mut PieceToHistory<i16>, piece: Piece, to: Square) -> i32 {

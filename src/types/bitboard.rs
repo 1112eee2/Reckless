@@ -14,6 +14,7 @@ impl Bitboard {
     pub const LIGHT_SQUARES: Self = Self(0x55AA55AA55AA55AA);
     pub const SEVENTH_RANK: [Bitboard; 2] = [Self::rank(Rank::R7), Self::rank(Rank::R2)];
     pub const THIRD_RANK: [Bitboard; 2] = [Self::rank(Rank::R3), Self::rank(Rank::R6)];
+    pub const HOME_ROWS: [Bitboard; 2] = [Self::rank(Rank::R1), Self::rank(Rank::R8)];
 
     /// Creates a bitboard with all bits set in the specified rank.
     pub const fn rank(rank: Rank) -> Self {
@@ -44,15 +45,19 @@ impl Bitboard {
         Square::new(self.0.trailing_zeros() as u8)
     }
 
+    pub const fn msb(self) -> Square {
+        Square::new(63 - self.0.leading_zeros() as u8)
+    }
+
     pub const fn shift(self, offset: i8) -> Self {
         if offset > 0 { Self(self.0 << offset) } else { Self(self.0 >> -offset) }
     }
 
-    pub fn set(&mut self, square: Square) {
+    pub const fn set(&mut self, square: Square) {
         self.0 |= 1 << square as u64;
     }
 
-    pub fn clear(&mut self, square: Square) {
+    pub const fn clear(&mut self, square: Square) {
         self.0 &= !(1 << square as u64);
     }
 }

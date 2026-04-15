@@ -10,7 +10,7 @@ use crate::{
     time::{Limits, TimeManager},
     tools,
     transposition::DEFAULT_TT_SIZE,
-    types::{Color, MAX_MOVES, Move, Score, is_decisive, is_loss, is_win},
+    types::{Color, MAX_MOVES, Move, Piece, Score, Square, is_decisive, is_loss, is_win},
 };
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -90,6 +90,8 @@ pub fn message_loop(mut buffer: VecDeque<String>) {
             ["perft"] => eprintln!("Usage: perft <depth>"),
             ["simpleperft", depth] => tools::simple_perft(depth.parse().unwrap(), &mut threads.main_thread().board),
             ["simpleperft"] => eprintln!("Usage: simpleperft <depth>"),
+            ["islegalperft", depth] => tools::is_legal_perft(depth.parse().unwrap(), &mut threads.main_thread().board),
+            ["islegalperft"] => eprintln!("Usage: islegalperft <depth>"),
 
             // Ignore empty lines
             [] => (),
@@ -242,7 +244,7 @@ fn go(threads: &mut ThreadPool, settings: &Settings, shared: &Arc<SharedContext>
 }
 
 fn position(threads: &mut ThreadPool, settings: &Settings, mut tokens: &[&str]) {
-    let mut board = Board::default();
+    let mut board = threads.main_thread().board.clone();
 
     while !tokens.is_empty() {
         match tokens {
@@ -264,10 +266,7 @@ fn position(threads: &mut ThreadPool, settings: &Settings, mut tokens: &[&str]) 
                 }
                 break;
             }
-            _ => {
-                tokens = &tokens[1..];
-                continue;
-            }
+            _ => tokens = &tokens[1..],
         }
     }
 
@@ -300,8 +299,8 @@ fn set_option(threads: &mut ThreadPool, settings: &mut Settings, shared: &Arc<Sh
             println!("info string set Hash to {v} MB");
         }
         ["name", "Threads", "value", v] => {
-            threads.set_count(v.parse().unwrap());
-            println!("info string set Threads to {v}");
+            threads.set_count(v.parse().unwrap_or(1));
+            println!("info string set Threads to {}", threads.len());
         }
         ["name", "MoveOverhead", "value", v] => {
             settings.move_overhead = v.parse().unwrap();
@@ -331,11 +330,60 @@ fn set_option(threads: &mut ThreadPool, settings: &mut Settings, shared: &Arc<Sh
 
 fn eval(td: &mut ThreadData) {
     td.nnue.full_refresh(&td.board);
-    let eval = match td.board.side_to_move() {
-        Color::White => td.nnue.evaluate(&td.board),
-        Color::Black => -td.nnue.evaluate(&td.board),
-    };
-    println!("{eval}");
+    td.nnue.evaluate(&td.board);
+
+    let side = td.board.side_to_move();
+
+    println!("NNUE derived piece values");
+    println!("+-------+-------+-------+-------+-------+-------+-------+-------+");
+    for rank in (0..8).rev() {
+        print!("|");
+        for file in 0..8 {
+            let sq = Square::from_rank_file(rank, file);
+            let piece = td.board.piece_on(sq);
+            let piece_str = if piece == Piece::None { " ".to_string() } else { piece.to_string() };
+            print!("  {:^3}  |", piece_str);
+        }
+        println!();
+
+        print!("|");
+        for file in 0..8 {
+            let sq = Square::from_rank_file(rank, file);
+            match td.nnue.piece_contribution(&td.board, sq) {
+                None => print!("       |"),
+                Some(v) => {
+                    let val = v as f32 / 100.0;
+                    print!("{:+6.2} |", val);
+                }
+            }
+        }
+        println!();
+        println!("+-------+-------+-------+-------+-------+-------+-------+-------+");
+    }
+
+    let used_bucket = crate::nnue::OUTPUT_BUCKETS_LAYOUT[td.board.occupancies().popcount()];
+
+    println!("\nNNUE output buckets (White side)");
+    println!("+------------+------------+");
+    println!("|   Bucket   |   Total    |");
+    println!("+------------+------------+");
+
+    for bucket in 0..8 {
+        let raw_score = td.nnue.eval_with_bucket(&td.board, bucket);
+        let white_score = if side == Color::White { raw_score } else { -raw_score };
+        let total = white_score as f32 / 100.0;
+
+        if bucket == used_bucket {
+            println!("|  {:<2}        | {:+7.2}    | <-- this bucket is used", bucket, total);
+        } else {
+            println!("|  {:<2}        | {:+7.2}    |", bucket, total);
+        }
+    }
+    println!("+------------+------------+");
+
+    let final_eval = td.nnue.evaluate(&td.board);
+    let final_total = (if side == Color::White { final_eval } else { -final_eval }) as f32 / 100.0;
+    println!("\nNNUE evaluation        {:+.2} (White side)", final_total);
 }
 
 fn parse_limits(color: Color, tokens: &[&str]) -> Limits {
@@ -379,5 +427,122 @@ fn parse_limits(color: Color, tokens: &[&str]) -> Limits {
     match moves {
         Some(moves) => Limits::Cyclic(main, inc, moves),
         None => Limits::Fischer(main, inc),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_position_helper(tokens: &[&str]) -> Board {
+        let shared = Arc::new(SharedContext::default());
+        let settings = Settings::default();
+        let mut threads = ThreadPool::new(shared);
+
+        position(&mut threads, &settings, tokens);
+        threads.main_thread().board.clone()
+    }
+
+    #[test]
+    fn test_position_startpos() {
+        let board = test_position_helper(&["startpos"]);
+        assert_eq!(board.to_fen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        let board = test_position_helper(&[]);
+        assert_eq!(board.to_fen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    }
+
+    #[test]
+    fn test_position_startpos_multiple_moves() {
+        let board = test_position_helper(&["moves", "e2e4", "e7e5", "g1f3"]);
+        assert_eq!(board.side_to_move(), Color::Black);
+        let fen = board.to_fen();
+        let fen_position = fen.split_whitespace().next().unwrap();
+        assert!(fen_position.contains("5N2"));
+    }
+
+    #[test]
+    fn test_position_fen_with_moves() {
+        let board = test_position_helper(&[
+            "fen",
+            "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR",
+            "b",
+            "KQkq",
+            "e3",
+            "0",
+            "1",
+            "moves",
+            "e7e5",
+        ]);
+        assert_eq!(board.side_to_move(), Color::White);
+    }
+
+    #[test]
+    fn test_position_empty_moves_list() {
+        let board = test_position_helper(&["moves"]);
+        assert_eq!(board.to_fen(), "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    }
+
+    #[test]
+    fn test_position_invalid_move_ignored() {
+        let board = test_position_helper(&["moves", "e2e4", "invalid", "e7e5"]);
+        assert_eq!(board.side_to_move(), Color::White);
+    }
+
+    #[test]
+    fn test_position_long_move_sequence() {
+        let board = test_position_helper(&["moves", "e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"]);
+        assert_eq!(board.side_to_move(), Color::White);
+    }
+
+    #[test]
+    fn test_position_castling() {
+        let board = test_position_helper(&[
+            "fen",
+            "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R",
+            "w",
+            "KQkq",
+            "-",
+            "0",
+            "1",
+            "moves",
+            "e1g1",
+        ]);
+        assert_eq!(board.side_to_move(), Color::Black);
+    }
+
+    #[test]
+    fn test_position_en_passant() {
+        let board = test_position_helper(&[
+            "fen",
+            "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR",
+            "w",
+            "KQkq",
+            "f6",
+            "0",
+            "1",
+            "moves",
+            "e5f6",
+        ]);
+        assert_eq!(board.side_to_move(), Color::Black);
+    }
+
+    #[test]
+    fn test_position_promotion() {
+        let board = test_position_helper(&["fen", "8/P7/8/8/8/8/8/4K2k", "w", "-", "-", "0", "1", "moves", "a7a8q"]);
+        assert_eq!(board.side_to_move(), Color::Black);
+    }
+
+    #[test]
+    fn test_make_uci_move_invalid() {
+        let mut board = Board::starting_position();
+        let fen_before = board.to_fen();
+        make_uci_move(&mut board, "invalid_move");
+        assert_eq!(board.to_fen(), fen_before);
+    }
+
+    #[test]
+    fn test_position_moves_without_startpos_ignored() {
+        let board = test_position_helper(&["moves", "e2e4", "e7e5"]);
+        assert_eq!(board.to_fen(), "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2");
     }
 }

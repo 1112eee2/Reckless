@@ -9,6 +9,7 @@ use std::{
 };
 
 use crate::{
+    board::Board,
     search::{self, Report},
     thread::{SharedContext, Status, ThreadData},
     time::TimeManager,
@@ -16,7 +17,7 @@ use crate::{
 
 pub struct ThreadPool {
     pub workers: Vec<WorkerThread>,
-    pub vector: Vec<Box<ThreadData>>,
+    pub vector: Vec<ThreadData>,
 }
 
 impl ThreadPool {
@@ -31,34 +32,36 @@ impl ThreadPool {
 
     pub fn new(shared: Arc<SharedContext>) -> Self {
         let workers = make_worker_threads(1);
-        let data = make_thread_data(shared, &workers);
+        let data = make_thread_data(shared, &workers, Board::starting_position().into());
 
         Self { workers, vector: data }
     }
 
     pub fn set_count(&mut self, threads: usize) {
+        let threads = threads.clamp(1, ThreadPool::available_threads());
         let shared = self.vector[0].shared.clone();
+        let board = Arc::new(self.vector[0].board.clone());
 
         self.workers.drain(..).for_each(WorkerThread::join);
         self.workers = make_worker_threads(threads);
 
         std::mem::drop(self.vector.drain(..));
-        self.vector = make_thread_data(shared, &self.workers);
+        self.vector = make_thread_data(shared, &self.workers, board);
     }
 
     pub fn main_thread(&mut self) -> &mut ThreadData {
         &mut self.vector[0]
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.vector.len()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Box<ThreadData>> {
+    pub fn iter(&self) -> impl Iterator<Item = &ThreadData> {
         self.vector.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Box<ThreadData>> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut ThreadData> {
         self.vector.iter_mut()
     }
 
@@ -66,7 +69,7 @@ impl ThreadPool {
         let shared = self.vector[0].shared.clone();
 
         std::mem::drop(self.vector.drain(..));
-        self.vector = make_thread_data(shared, &self.workers);
+        self.vector = make_thread_data(shared, &self.workers, Board::starting_position().into());
     }
 
     pub fn execute_searches(&mut self, time_manager: TimeManager, report: Report, shared: &Arc<SharedContext>) {
@@ -257,16 +260,19 @@ fn make_worker_threads(num_threads: usize) -> Vec<WorkerThread> {
     }
 }
 
-fn make_thread_data(shared: Arc<SharedContext>, worker_threads: &[WorkerThread]) -> Vec<Box<ThreadData>> {
-    std::thread::scope(|scope| -> Vec<Box<ThreadData>> {
+fn make_thread_data(shared: Arc<SharedContext>, worker_threads: &[WorkerThread], board: Arc<Board>) -> Vec<ThreadData> {
+    std::thread::scope(|scope| -> Vec<ThreadData> {
         let handles = worker_threads
             .iter()
             .map(|worker| {
                 let (tx, rx) = std::sync::mpsc::channel();
                 let shared = shared.clone();
+                let board = board.clone();
                 let join_handle = scope.spawn_into(
                     move || {
-                        tx.send(Box::new(ThreadData::new(shared))).unwrap();
+                        let mut td = Box::new(ThreadData::new(shared));
+                        td.board = (*board).clone();
+                        tx.send(td).unwrap();
                     },
                     worker,
                 );
@@ -274,10 +280,10 @@ fn make_thread_data(shared: Arc<SharedContext>, worker_threads: &[WorkerThread])
             })
             .collect::<Vec<_>>();
 
-        let mut thread_data: Vec<Box<ThreadData>> = Vec::with_capacity(handles.len());
+        let mut thread_data: Vec<ThreadData> = Vec::with_capacity(handles.len());
         for (rx, handle) in handles {
             let td = rx.recv().unwrap();
-            thread_data.push(td);
+            thread_data.push(*td);
             handle.join();
         }
 

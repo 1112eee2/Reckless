@@ -11,21 +11,24 @@ impl Stack {
     pub fn sentinel(&mut self) -> &mut StackEntry {
         unsafe { self.data.get_unchecked_mut(0) }
     }
-}
 
-impl Default for Stack {
-    fn default() -> Self {
-        let mut stack = Self {
-            data: [StackEntry::default(); MAX_PLY + 16],
-            sentinel: [[0; 64]; 13],
-        };
-
+    pub fn new() -> Box<Self> {
+        let mut stack = Box::new(Self::default());
         let ptr = &raw mut stack.sentinel;
         for entry in &mut stack.data {
             entry.conthist = ptr;
             entry.contcorrhist = ptr;
         }
         stack
+    }
+}
+
+impl Default for Stack {
+    fn default() -> Self {
+        Self {
+            data: [StackEntry::default(); MAX_PLY + 16],
+            sentinel: [[0; 64]; 13],
+        }
     }
 }
 
@@ -69,13 +72,13 @@ impl Index<isize> for Stack {
 
     fn index(&self, index: isize) -> &Self::Output {
         debug_assert!(index + 8 >= 0 && index < MAX_PLY as isize + 16);
-        unsafe { self.data.get_unchecked((index + 8) as usize) }
+        &self.data[(index + 8) as usize]
     }
 }
 
 impl IndexMut<isize> for Stack {
     fn index_mut(&mut self, index: isize) -> &mut Self::Output {
         debug_assert!(index + 8 >= 0 && index < MAX_PLY as isize + 16);
-        unsafe { self.data.get_unchecked_mut((index + 8) as usize) }
+        &mut self.data[(index + 8) as usize]
     }
 }
